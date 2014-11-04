@@ -1,16 +1,3 @@
-Remarklet, the Remarkable Markup Bookmarklet (http://remarklet.com/)
-by Zachary Kendall Watkins, zwatkins7@yahoo.com
-
-This JavaScript bookmarklet is built on jQuery and jQuery UI and will allow you to rapidly prototype web site changes and more easily communicate web site revisions with others. More enhancements are planned for the future (such as copying page elements and allowing file saving via data URI), but I wanted to make this first version available to the public as soon as I felt it was ready with the basic, essential features.
-
-If you enjoy using this tool, I would 
-appreciate hearing from you!
-
-==================================================================
-Remarklet by Zachary Kendall Watkins is licensed under the MIT License.
-
-JavaScript and CSS code created by jQuery and jQuery UI are separated from the author's code by notes in the source files (http://remarklet.com/files/remarklet.js)(http://remarklet.com/files/remarklet.css).
-
 The MIT License (MIT)
 Copyright (c) 2014 BioEngine
 
