@@ -1,5 +1,5 @@
 /*! Remarklet - v1.0.1 - 2014-11-03
-* by Zach Watkins (zwatkins7@yahoo.com)
+* by Zach Watkins (watkinza@gmail.com)
 * http://remarklet.com
 * licensed under the MIT License.
 */
