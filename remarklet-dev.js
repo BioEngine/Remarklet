@@ -41,9 +41,6 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 	var stylesheet = (function(){
 		var style;
 		var rules = {};
-		var returnHTML = function(){
-			return style.innerHTML.replace(/\n/g, '<br>');
-		};
 		return {
 			init: function(obj){
 				style = obj;
@@ -68,20 +65,25 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 				}
 				rules[selector] = rule;
 			},
-			setHTML: function(str, bool){
-				style.innerHTML = str.replace(/<br>/g,'\n').replace(/&nbsp;/g,' ');
-				var arr = jQuery('#remarklet-usercss').get(0).innerHTML.split('}').slice(0,-1),
-					t;
+			fromHTML: function(html){
+				var t, name;
+				html = html.replace(/<br>/g,' ').replace(/(&nbsp;|\s)+/g,' ').replace(/\s*([{}]+)\s+/g,'$1').split('}').slice(0,-1);
 				rules = {};
-				for(var i=0; i<arr.length; i++){
-					t = arr[i].split('{');
-					rules[t[0]] = t[1];
+				for(var i=0; i<html.length; i++){
+					t = html[i].split('{');
+					rules[t[0]] = '{' + t[1] + '}';
 				}
+				t = '';
+				for(name in rules){ 
+					t += name;
+					t += ' ';
+					t += rules[name].replace(/({|;)\s*/g,'$1\n    ').replace('    }','}\n');
+				}
+				style.innerHTML = t;
 			},
 			getRules: function(){
 				return rules;
-			},
-			getHTML: returnHTML
+			}
 		};
 	}());
 	/* Element Duplication Module. Dependency: stylesheet.setRule */
@@ -443,12 +445,11 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 			}
 		},
 		updateUserCSS: function(e){
-			stylesheet.setHTML(remarklet.ui.csseditor.find('div').html());
+			stylesheet.fromHTML(remarklet.ui.csseditor.find('div').html());
 		},
 		updateUserCSSUI: function(e){
 			var rules = stylesheet.getRules();
 			var html = '';
-			console.log(rules);
 			for(name in rules){
 				html += name;
 				html += ' ';
@@ -470,51 +471,53 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 			$('.remarklet-show-usercss #remarklet-usercss-editor').focus();
 		},
 		keyboardshortcuts: function(e){
-			switch(e.keyCode){
-				case 67: /*C*/
-					if(remarklet.mode == 'drag' && e.ctrlKey){
-						remarklet.clipboard = remarklet.target;
-					}
-					break;
-				case 84: /*T*/
-					if(remarklet.mode == 'drag'){
-						if(!e.ctrlKey){
-							remarklet.usercommand.switchmode('text');
-							e.preventDefault();
-						} else if(e.altKey){
-							remarklet.target.resizable(remarklet.resizeOps);
+			if(e.target != remarklet.ui.csseditor.find('#remarklet-usercss-editor').get(0)){
+				switch(e.keyCode){
+					case 67: /*C*/
+						if(remarklet.mode == 'drag' && e.ctrlKey){
+							remarklet.clipboard = remarklet.target;
+						}
+						break;
+					case 84: /*T*/
+						if(remarklet.mode == 'drag'){
+							if(!e.ctrlKey){
+								remarklet.usercommand.switchmode('text');
+								e.preventDefault();
+							} else if(e.altKey){
+								remarklet.target.resizable(remarklet.resizeOps);
+								e.preventDefault();
+							}
+						}
+						break;
+					case 86: /*V*/
+						if(remarklet.mode == 'drag' && e.ctrlKey){
+							remarklet.storage.editcounter++;
+							if(remarklet.clipboard.draggable('instance')){
+								remarklet.clipboard.draggable('destroy');
+							}
+							var original = remarklet.clipboard.removeClass('remarklet-target').get(0);
+							var dupe = duplicate.create(original, original, {id: '', class: 'remarklet remarklet-' + remarklet.storage.editcounter});
+							$(dupe).data('remarklet', remarklet.storage.editcounter);
+						} else if(remarklet.mode == 'text' && !remarklet.texttarget){
+							remarklet.usercommand.switchmode('drag');
 							e.preventDefault();
 						}
-					}
-					break;
-				case 86: /*V*/
-					if(remarklet.mode == 'drag' && e.ctrlKey){
-						remarklet.storage.editcounter++;
-						if(remarklet.clipboard.draggable('instance')){
-							remarklet.clipboard.draggable('destroy');
+						break;
+					case 13: /*Enter*/
+						if(remarklet.mode == 'drag' && $('.ui-resizable').length > 0){
+							$('.ui-resizable').resizable('destroy');
+						} else if(remarklet.mode == 'text' && e.ctrlKey){
+							remarklet.usercommand.switchmode('drag');
+							e.preventDefault();
+							e.stopPropagation();
 						}
-						var original = remarklet.clipboard.removeClass('remarklet-target').get(0);
-						var dupe = duplicate.create(original, original, {id: '', class: 'remarklet remarklet-' + remarklet.storage.editcounter});
-						$(dupe).data('remarklet', remarklet.storage.editcounter);
-					} else if(remarklet.mode == 'text' && !remarklet.texttarget){
-						remarklet.usercommand.switchmode('drag');
-						e.preventDefault();
-					}
-					break;
-				case 13: /*Enter*/
-					if(remarklet.mode == 'drag' && $('.ui-resizable').length > 0){
-						$('.ui-resizable').resizable('destroy');
-					} else if(remarklet.mode == 'text' && e.ctrlKey){
-						remarklet.usercommand.switchmode('drag');
-						e.preventDefault();
-						e.stopPropagation();
-					}
-					break;
-				case 46: /*Del*/
-					if(remarklet.mode == 'drag'){
-						remarklet.target.remove();
-					}
-				default: break;
+						break;
+					case 46: /*Del*/
+						if(remarklet.mode == 'drag'){
+							remarklet.target.remove();
+						}
+					default: break;
+				}
 			}
 		},
 		switchmode: function(newmode){
