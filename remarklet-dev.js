@@ -17,6 +17,7 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 		dragging: false,
 		mousecoords: {x: null, y: null},
 		texttarget: false,
+		typingTimer: false,
 		ui: {
 			menuwrapper: $('<div id="remarklet-menu"></div>'),
 			csseditor: $('<div id="remarklet-ui-usercss" class="remarklet-do-resize remarklet-dont-edit">CSS Changes<div id="remarklet-usercss-editor" ></div></div>'),
@@ -69,7 +70,7 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 				var t, name;
 				html = html.replace(/<br>/g,' ').replace(/(&nbsp;|\s)+/g,' ').replace(/\s*([{}]+)\s+/g,'$1').split('}').slice(0,-1);
 				rules = {};
-				for(var i=0; i<html.length; i++){
+				for(var i=0, len=html.length; i<len; i++){
 					t = html[i].split('{');
 					rules[t[0]] = '{' + t[1] + '}';
 				}
@@ -137,7 +138,7 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 					values += ';';
 				}
 			}
-			for(var i=0; i<elstyle.length; i++){
+			for(var i=0, len=elstyle.length; i<len; i++){
 				flag = false;
 				attribute = elstyle[i];
 				value = elstyle.getPropertyValue(attribute);
@@ -236,11 +237,11 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 
 				selectors.push(getSelector(target));
 
-				for(var i=0; i<children.length; i++){
+				for(var i=0, len=children.length; i<len; i++){
 					selectors.push(getSelectorsBetween(target, children[i]));
 				}
 
-				for(var j=0; j<selectors.length; j++){
+				for(var j=0, len=selectors.length; j<len; j++){
 					tsel = selectors[j];
 					csel = cloneselector + selectors[j].replace(selectors[0], '');
 					if(rules[csel] === undefined){
@@ -635,7 +636,16 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 			$('<li>' + i + '</li>').append($submenu).appendTo(remarklet.ui.menuwrapper).wrap('<ol class="remarklet-menuitem"></ol>');
 		}
 		/* Add remaining app UI events */
-		remarklet.ui.csseditor.on('keyup', remarklet.usercommand.updateUserCSS);
+		remarklet.ui.csseditor.on('keydown', function(){
+			if(remarklet.typingTimer !== false){
+				window.clearTimeout(remarklet.typingTimer);
+			}
+			remarklet.typingTimer = window.setTimeout(function(){
+				remarklet.ui.csseditor.trigger('stoptyping');
+				remarklet.typingTimer = false;
+			}, 500);
+		});
+		remarklet.ui.csseditor.on('stoptyping', remarklet.usercommand.updateUserCSS);
 		remarklet.win.on('keydown', remarklet.usercommand.keyboardshortcuts);
 		
 		/* Initialize modules. */
