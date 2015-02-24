@@ -10,214 +10,178 @@ require.config({
 	}
 });
 requirejs(['jquery','jqueryui'], function($, $ui){
-	remarklet = {
-		win: $(window),
-		body: $('body'),
-		mode: 'drag',
-		texttarget: false,
-		pageSavedState: '',
+	var $w = $(window);
+	var $b = $('body');
+	var remarklet = {};
+	var _target;
+	var _texttarget = false;
+	var _mode = 'drag';
+	var _dragging = false;
+	var _typingTimer = false;
+	var _stored = {
 		clipboard: null,
-		resizeOps: {},
+		pageSavedState: '',
 		fileRead: false,
-		getBlobURL: (window.URL && URL.createObjectURL.bind(URL)) || (window.webkitURL && webkitURL.createObjectURL.bind(webkitURL)) || window.createObjectURL,
-		mousePos: {x: null, y: null},
-		dragging: false,
-		el: {
-			box: $('#remarklet-box').length == 0 ? $('<div id="remarklet-box"></div>') : $('#remarklet-box'),
-			defaults: $('#remarklet-defaults'),
-			usercss: $('#remarklet-usercss').length == 0 ? $('<style id="remarklet-usercss" type="text/css"></style>') : $('#remarklet-usercss'),
-			promptwindow: $('<div id="remarklet-prompt"><div id="remarklet-prompt-content"><div id="remarklet-prompt-form" ></div><button id="remarklet-prompt-submit" type="button">OK</button><button id="remarklet-prompt-cancel" type="button">Cancel</button></div></div>'),
-			menuwrapper: $('<div id="remarklet-menu"></div>'),
-			gridoverlay: $('<div id="remarklet-grid"></div>')
+		editcounter: 0
+	};
+	var preferences = {
+		'Grid': {
+			'Size': '100px',
+			'Division': 5,
+			'Background': 'transparent',
+			'Lines': '#fff'
 		},
-		getLastEdited: function(){
-			/* Unfortunately, getting the last element doesn't mean it will have the largest edit number. */
-			var last = 0;
-			$('.remarklet-ed').each(function(item){
-				var curint = parseInt(this.className.match(/remarklet-ed-([0-9]+)/)[1]);
-				if(curint > last){
-					last = curint;
-				}
-			});
-			return last;
+		'CSS Editor': {
+			'Indentation': '    ',
+			'Font Size': '12pt',
+			'Update': 500
 		},
-		returnSelector: function($el, ancestor){
-			if($el.jquery == undefined) $el = $($el);
-			var value = '',
-				$parent = $el.parent().length > 0 ? $el.parent() : $el,
-				limit = ancestor ? $(ancestor).parent().get(0) : $parent.parent().get(0),
-				temp, id, cl;
-			while($parent.get(0) != limit){
-				temp = value;
-				value = $el.get(0).tagName.toLowerCase();
-				if($el.attr('id')){
-					value += '#';
-					value += $el.attr('id');
-				}
-				if($el.attr('class')){
-					value += '.';
-					value += $el.attr('class').replace(/\s+/g,'.');
-				}
-				value += temp;
-				$el = $parent;
-				$parent = $parent.parent();
-			}
-			return value;
+		'Export': {
+			'Disable Javascript': true,
+			'Show Browser Info': false,
+			'Require Absolute URLs': true
 		}
 	};
-	remarklet.storedcss = {
-		defaultrules: {},
-		rules: {},
-		text: '',
-		editcounter: remarklet.getLastEdited()
+	var views = {
+		menuwrapper: $('<div id="remarklet-menu"></div>'),
+		csseditor: $('<div id="remarklet-ui-usercss" class="remarklet-do-resize remarklet-dont-edit">CSS Changes<div id="remarklet-usercss-editor" ></div></div>'),
+		/*preferences: $('<div id="remarklet-ui-preferences" class="remarklet-dont-resize remarklet-dont-edit"></div>'),
+		help: $('<div id="remarklet-ui-help" class="remarklet-dont-resize remarklet-dont-edit"></div>'),*/
+		gridoverlay: $('<div id="remarklet-grid"></div>'),
+		usercss: $('#remarklet-usercss').length === 0 ? $('<style id="remarklet-usercss" type="text/css"></style>') : $('#remarklet-usercss'),
+		box: $('#remarklet-box').length === 0 ? $('<div id="remarklet-box"></div>') : $('#remarklet-box')
 	};
-	remarklet.dragOps = {
+	var dragOps = {
 		start: function(event, ui){
-			remarklet.dragging = true;
-			remarklet.target = $(event.target);
-			remarklet.body.off('mousemove', remarklet.recordMousePos);
+			_dragging = true;
+			_target = $(event.target);
+			$b.off('mousemove', _mouse.update);
 		},
 		stop: function(event, ui){
 			var $target = $(event.target);
-			remarklet.dragging = false;
-			remarklet.recordMousePos(event);
-			remarklet.body.on('mousemove', remarklet.recordMousePos);
-			remarklet.usercommand.setCSSRule('.remarklet-ed-' + $target.data('remarklet-ed'), $target.attr('style'));
+			_dragging = false;
+			_mouse.update(event);
+			$b.on('mousemove', _mouse.update);
+			stylesheet.setRule('.remarklet-' + $target.data('remarklet'), $target.attr('style'));
 			$target.removeAttr('style');
-			remarklet.usercommand.updateUserCSS();
+			usercommand.updateUserCSSUI();
 		}
 	};
-	/* Define commands that the user can execute */
-	remarklet.usercommand = {
-		toggleGrid: function(){
-			remarklet.body.toggleClass('remarklet-show-grid');
-		},
-		toggleOutlines: function(){
-			remarklet.body.toggleClass('remarklet-show-outlines');
-		},
-		toggleUserCSS: function(){
-			remarklet.body.toggleClass('remarklet-show-usercss');
-			remarklet.el.csseditor.find('div').attr('contenteditable', function(){
-				return this.contentEditable != 'true';
-			});
-			$('.remarklet-show-usercss #remarklet-usercss-editor').focus();
-		},
-		addImage: function(){
-			remarklet.prompt('<label>Make a placeholder</label><input type="text" value="300x200" id="remarklet-imgdimensions" name="imgdimensions" autofocus="autofocus"> <input type="text" value="#cccccc" id="remarklet-bgcolor" name="bgcolor"> <input type="text" value="#000000" id="remarklet-textcolor" name="textcolor"> <input type="text" value="Image (300x200)" id="remarklet-text" name="imgtext"><br /><label>Enter image url</label><input name="imgurl" id="remarklet-url" type="text" value=""><br><label>Add local file <span title="This image will expire when you leave the page, and will not be stored if you save the page as an HTML file." class="remarklet-hovernote">?</span></label><input name="file" id="remarklet-file" type="file" onchange="jQuery(\'#remarklet-prompt-submit\').attr(\'disabled\',true);var f=this.files[0];var fr=new FileReader();fr.onload=function(ev2){jQuery(\'#remarklet-prompt-submit\').removeAttr(\'disabled\');remarklet.fileRead=remarklet.getBlobURL(f);};fr.readAsDataURL(f);});"/>', function(data){
-				remarklet.storedcss.editcounter++;
-				var string,
-					ednum = remarklet.storedcss.editcounter;
-				if(data.imgurl.length>1){
-					string = '<img src="' + data.imgurl + '" style="left:' + remarklet.mousePos.x + 'px;top:' + remarklet.mousePos.y + 'px" class="remarklet-newimg" />';
-				} else if(remarklet.fileRead!=false){
-					string = '<img src="' + remarklet.fileRead + '" style="left:' + remarklet.mousePos.x + 'px;top:' + remarklet.mousePos.y + 'px" class="remarklet-newimg" />';
-					remarklet.fileRead = false;
+	var resizeOps = {};
+	var _mouse = {
+		x: null,
+		y: null,
+		update: function(e){
+			_mouse.x = e.pageX - views.box.offset().left;
+			_mouse.y = e.pageY;
+		}
+	};
+	var _getBlobURL = (window.URL && URL.createObjectURL.bind(URL)) || (window.webkitURL && webkitURL.createObjectURL.bind(webkitURL)) || window.createObjectURL;
+	/* Stylesheet Module */
+	var stylesheet = (function(){
+		var style;
+		var rules = {};
+		return {
+			init: function(obj){
+				style = obj;
+			},
+			setRule: function(selector, rule){
+				if(!rule) return;
+				var found = false,
+					i = style.sheet.cssRules.length-1;
+				rule = '{' + rule + '}';
+				while(i >= 0){
+					if(selector == style.sheet.cssRules[i].selectorText){
+						found = style.sheet.cssRules[i];
+						i = 0;
+					}
+					i--;
+				}
+				if(!found){
+					style.sheet.insertRule(selector + rule, style.sheet.cssRules.length);
 				} else {
-					string = '<div style="color:' + data.textcolor + ';background-color:' + data.bgcolor + ';width:' + data.imgdimensions.toLowerCase().split('x')[0] + 'px;height:' + data.imgdimensions.toLowerCase().split('x')[1] + 'px;left:' + remarklet.mousePos.x + 'px;top:' + remarklet.mousePos.y + 'px" class="remarklet-newimg">' + data.imgtext + '</div>';
+					found.style.cssText = found.style.cssText.replace(/}.*$/,'') + rule.slice(1);
+					rule = '{'+found.style.cssText+'}';
 				}
-				$(string).data('remarklet-ed', ednum).addClass('remarklet-ed remarklet-ed-' + ednum).appendTo(remarklet.el.box);
-			});
-		},
-		addNote: function(){
-			remarklet.prompt('<label>Enter note text</label><textarea name="notetext" id="remarklet-text" type="text" autofocus="autofocus" cols="48" rows="13">Enter your note\'s text here.</textarea>', function(data){
-				remarklet.storedcss.editcounter++;
-				/* Characters seem to be 8px wide */
-				var width = data.notetext.length * 8,
-					ednum = remarklet.storedcss.editcounter;
-				if(width > 500){
-					width = 500;
+				rules[selector] = rule;
+			},
+			fromHTML: function(html){
+				var t, name;
+				html = html.replace(/<br>/g,' ').replace(/(&nbsp;|\s)+/g,' ').replace(/\s*([{}]+)\s+/g,'$1').split('}').slice(0,-1);
+				rules = {};
+				for(var i=0, len=html.length; i<len; i++){
+					t = html[i].split('{');
+					rules[t[0]] = '{' + t[1] + '}';
 				}
-				$('<div class="remarklet-note" style="left:' + remarklet.mousePos.x + 'px;top:' + remarklet.mousePos.y + 'px;width:' + width + 'px">' + data.notetext + '</div>').data('remarklet-ed', ednum).addClass('remarklet-ed remarklet-ed-' + ednum).appendTo(remarklet.el.box);
-			});
-		},
-		addCode: function(){
-			remarklet.prompt('<label>Enter HTML</label><textarea name="codetext" id="remarklet-text" type="text" autofocus="autofocus" cols="48" rows="13">Enter your code here.</textarea>', function(data){
-				remarklet.storedcss.editcounter++;
-				var ednum = remarklet.storedcss.editcounter;
-				$('<div class="remarklet-usercode" style="position:absolute;left:' + remarklet.mousePos.x + 'px;top:' + remarklet.mousePos.y + 'px;">' + data.codetext + '</div>').data('remarklet-ed', ednum).addClass('remarklet-ed remarklet-ed-' + ednum).appendTo(remarklet.el.box).css({
-					width: function(){return this.clientWidth + 1},
-					height: function(){return this.clientHeight + 1}
-				});
-			});
-		},
-		exportPage: function(){
-			var html,
-				appfiles = $('script[src*="remarklet.com/rm/scripts"],link[href*="remarklet.com/rm/scripts"]'),
-				appfilecode = new Array(),
-				data = 'data:text/html;charset=UTF-8,',
-				pathpart = location.pathname.split('/'); 
-			pathpart.pop();
-			pathpart = pathpart.join('/');
-			if(document.doctype && document.doctype.publicId==''){
-				html = '<!DOCTYPE html>';
-			} else {
-				html = document.doctype?'<!DOCTYPE ' + document.doctype.name.toUpperCase() + ' PUBLIC "' + document.doctype.publicId + '" "' + document.doctype.systemId + '">' : document.all[0].text;
+				t = '';
+				for(name in rules){ 
+					t += name;
+					t += ' ';
+					t += rules[name].replace(/({|;)\s*/g,'$1\n    ').replace('    }','}\n');
+				}
+				style.innerHTML = t;
+			},
+			getRules: function(){
+				return rules;
 			}
-			remarklet.el.retained.remove();
-			for(i=0; i<appfiles.length; i++){
-				appfilecode.push(appfiles.get(i).outerHTML);
+		};
+	}());
+	/* Element Duplication Module. Dependency: stylesheet.setRule */
+	var duplicate = (function(){
+		var rules = {},
+			rulelength = 0,
+			stylesheet;
+		var getSelector = function(el){
+			var value = el.tagName.toLowerCase();
+			if(el.id !== ''){
+				value += '#';
+				value += el.id;
 			}
-			var appfileregexp = new RegExp(appfilecode.toString().replace(',','|').replace(/(\.|\/)/g,'\$1'));
-			html += document.documentElement.outerHTML.replace(appfileregexp, '');
-			remarklet.el.retained.appendTo(remarklet.body);
-			html = html.replace(/.overflowRulerX > .firebug[^{]+{[^}]+}|.overflowRulerY\s>\s.firebug[^{]+{[^}]+}/gi,'').replace(/(src|href)=("|')\/\//g, '$1=$2'+location.protocol).replace(/(src|href)=("|')(\/|(?=[^:]{6}))/gi, '$1=$2'+location.protocol + '//' + location.hostname + pathpart + '/').replace(/<script/gi,'<!-- script').replace(/<\/script>/gi,'</script -->').replace(/url\(&quot;/gi,'url(').replace(/.(a-z){3}&quot;\)/gi,'$1)').replace(/url\(\//gi,'url('+location.protocol+'//'+location.hostname+pathpart+'/').replace(/\sremarklet-show-(grid|outlines|usercss)\s/g,' ').replace(/\s?remarklet-show-(grid|outlines|usercss)\s?|\s/g,' ');
-			data += encodeURIComponent(html);
-			window.open(data, 'Exported From Remarklet', '');
-		},
-		savePageState: function(){
-			remarklet.pageSavedState = '';
-			remarklet.body.children().not(remarklet.el.retained).each(function(){
-				remarklet.pageSavedState += this.outerHTML.replace(/<script/gi,'<!-- script').replace(/<\/script>/gi,'</script -->');
-			});
-		},
-		restorePageState: function(){
-			if(remarklet.pageSavedState != ''){
-				remarklet.body.children().not(remarklet.el.retained).remove();
-				remarklet.body.prepend(remarklet.pageSavedState);
-				remarklet.el.usercss = $('#remarklet-usercss');
-				remarklet.el.box = $('#remarklet-box');
+			if(el.className !== ''){
+				value += '.';
+				value += el.className.replace(/\s+/g,'.');
 			}
-		},
-		updateUserCSS: function(){
-			remarklet.el.usercss.html(remarklet.el.csseditor.find('div').html().replace(/<br>/g,'\n').replace(/&nbsp;/g,' ') + remarklet.storedcss.text);
-		},
-		returnUniqueStyles: function(sel){
+			return value;
+		};
+		var getSelectorsBetween = function(start, end){
+			var parent = end.parentNode,
+				limit = start.parentNode,
+				value = getSelector(end),
+				temp;
+			while(parent != limit){
+				temp = value;
+				value = getSelector(parent);
+				value += ' ';
+				value += temp;
+				parent = parent.parentNode;
+			}
+			return value;
+		};
+		var getUniqueStyles = function(sel, destination, clone){
 			sel = sel.split(':');
-			console.log(sel);
 			var selector = sel[0],
 				pseudoselector = sel.length > 1 ? ':' + sel[1] : null,
 				el = document.querySelector(selector),
 				elstyle = window.getComputedStyle(el, pseudoselector),
 				parentstyle = window.getComputedStyle(el.parentNode, null),
-				defaultstylename = pseudoselector ? el.tagName + ':' + pseudoselector : el.tagName,
-				defaultstyle = remarklet.storedcss.defaultrules[defaultstylename],
+				clonestyle = window.getComputedStyle(clone, pseudoselector),
 				values = '',
 				flag, attribute, value;
-			if(!defaultstyle){
-				/* Register element's default styles so we only need to generate them once. */
-				var example = document.createElement(el.tagName);
-				remarklet.el.defaults.append(example);
-				remarklet.storedcss.defaultrules[defaultstylename] = window.getComputedStyle(example, pseudoselector);
-				defaultstyle = remarklet.storedcss.defaultrules[defaultstylename];
-			}
 			if(pseudoselector){
-				if(elstyle.content == defaultstyle.content && elstyle.content == 'none'){
-					/* If a pseudo-element has no content, we can assume it is not being used. */
+				if(elstyle.content == clonestyle.content && elstyle.content == 'none'){
 					return;
 				} else {
-					/* Due to a bug in Chrome, we have to add the "content" property manually. */
-					defaultstyle = window.getComputedStyle(el, null);
+					clonestyle = window.getComputedStyle(el, null);
 					values += 'content: ';
 					values += elstyle.content;
-					values += ';'
+					values += ';';
 				}
 			}
-			for(var i=0; i<elstyle.length; i++){
+			for(var i=0, len=elstyle.length; i<len; i++){
 				flag = false;
 				attribute = elstyle[i];
 				value = elstyle.getPropertyValue(attribute);
-				if(value != defaultstyle.getPropertyValue(attribute)){
-					/* When values are auto-calculated by the browser in place of words like auto, none, or 50% */
+				if(value != clonestyle.getPropertyValue(attribute)){
 					switch(attribute){
 						case 'outline-color':
 						case '-webkit-text-emphasis-color':
@@ -233,7 +197,7 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 						case 'border-left-color':
 						case 'border-right-color':
 						case 'border-top-color':
-							if(elstyle.borderWidth == '' || elstyle.borderWidth == '0px'){
+							if(elstyle.borderWidth === '' || elstyle.borderWidth == '0px'){
 								flag = true;
 							}
 							break;
@@ -242,6 +206,7 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 							if(elstyle.getPropertyValue(attribute.replace('color','width')) == '0px'){
 								flag = true;
 							}
+							break;
 						case '-moz-text-decoration-line':
 						case '-webkit-text-decoration-line':
 							if(value == elstyle.textDecoration){
@@ -261,17 +226,15 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 							}
 							break;
 						case '-webkit-text-decorations-in-effect':
-							/* Is there a need for this attribute? */
 							flag = true;
 							break;
 						case 'content':
-							/* We already included this value since Chrome doesn't enumerate it */
 							flag = true;
 							break;
 						default:
 							break;
 					}
-					if(!flag && parentstyle.getPropertyValue(attribute) != value){
+					if(!flag && (parentstyle.getPropertyValue(attribute) != value || clonestyle.getPropertyValue(attribute) != value)){
 						values += attribute;
 						values += ':';
 						values += value;
@@ -280,171 +243,375 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 				}
 			}
 			return values;
-		},
-		setCSSRule: function(selector, styles){
-			if(!styles) return;
-			var found = false,
-				rules = remarklet.el.usercss.get(0).sheet.cssRules,
-				i = rules.length-1
-				newcss = '{' + styles + '}';
-			while(i>=0){
-				if(selector == rules[i].selectorText){
-					found = remarklet.el.usercss.get(0).sheet.cssRules[i];
-					i = 0;
+		};
+		var addRule;
+		return {
+			init: function(stylesheetModule){
+				addRule = stylesheetModule.setRule;
+			},
+			setSheet: function(obj){
+				stylesheet = obj;
+			},
+			create: function(sel, destination, attrs){
+				var target = typeof sel == 'string' ? document.querySelector(sel) : sel,
+					selectors = [],
+					children = target.querySelectorAll('*'),
+					clone = target.cloneNode(true),
+					len = children.length,
+					tsel, csel, cloneselector;
+				if(attrs){
+					if(attrs.id) clone.id = attrs.id;
+					if(attrs.class) clone.className = attrs.class;
 				}
-				i--;
+				cloneselector = getSelector(clone);
+
+				if(typeof destination == 'string'){
+					document.querySelector(destination).appendChild(clone);
+				} else {
+					if(destination.nextSibling){
+						destination.parentNode.insertBefore(clone, destination.nextSibling);
+					} else {
+						destination.parentNode.appendChild(clone);
+					}
+				}
+
+				selectors.push(getSelector(target));
+
+				for(var i=0; i<len; i++){
+					selectors.push(getSelectorsBetween(target, children[i]));
+				}
+				len = selectors.length;
+				for(var j=0; j<len; j++){
+					tsel = selectors[j];
+					csel = cloneselector + selectors[j].replace(selectors[0], '');
+					if(rules[csel] === undefined){
+						addRule(csel, getUniqueStyles(tsel, destination, clone));
+						addRule(csel+':before', getUniqueStyles(tsel+':before', destination, clone));
+						addRule(csel+':after', getUniqueStyles(tsel+':after', destination, clone));
+					}
+				}
+				return clone;
 			}
-			if(!found){
-				remarklet.el.usercss.get(0).sheet.insertRule(selector + newcss, rules.length);
-			} else {
-				found.style.cssText = found.style.cssText.replace(/}.*$/,'') + newcss.slice(1);
-				newcss = '{'+found.style.cssText+'}';
-			}
-			remarklet.storedcss.rules[selector] = newcss;
-			remarklet.storedcss.text = JSON.stringify(remarklet.storedcss.rules).replace(/":"|","|^{"|"}$/g,'');
-		}
-	};
-	remarklet.usercommand.duplicate = function(sel, attrs){
-		var $target = typeof sel == 'object' ? sel : $(sel),
-			$children = $target.find('*'),
-			$clone = $target.clone(true),
-			selectors = new Array(),
-			tarsel, closel;
-		
-		if(attrs){
-			if(attrs.id) $clone.attr('id', attrs.id);
-			if(attrs.class) $clone.attr('class', attrs.class);
-		}
-		var cloneselector = remarklet.returnSelector($clone);
-		
-		selectors.push(remarklet.returnSelector($target));
-		$children.each(function(){
-			selectors.push(remarklet.returnSelector(this, $target));
-		});
-		for(var i=0; i<selectors.length; i++){
-			tsel = selectors[i];
-			csel = cloneselector + selectors[i].replace(selectors[0], '');
-			if(remarklet.storedcss.rules[csel] == undefined){
-				remarklet.usercommand.setCSSRule(csel, remarklet.usercommand.returnUniqueStyles(tsel));
-				remarklet.usercommand.setCSSRule(csel+':before', remarklet.usercommand.returnUniqueStyles(tsel+':before'));
-				remarklet.usercommand.setCSSRule(csel+':after', remarklet.usercommand.returnUniqueStyles(tsel+':after'));
-			}
-		}
-		
-		return $clone;
-	}
-	remarklet.el.csseditor = $('<div id="remarklet-ui-usercss" class="remarklet-do-resize remarklet-dont-edit">CSS Changes<div id="remarklet-usercss-editor" ></div></div>').on('keyup', remarklet.usercommand.updateUserCSS);
-	remarklet.prompt = function(formhtml, callback){
-		remarklet.body.off('mousemove', remarklet.recordMousePos);
-		/* Provide prompt window for user input */
-		remarklet.el.promptwindow.find('#remarklet-prompt-form').html(formhtml);
-		remarklet.win.on('keydown',remarklet.promptwindowkeydown);
-		remarklet.el.promptwindow.show();
-		remarklet.el.promptwindow.find('#remarklet-prompt-content').css({'margin-top':function(){
-			return -1 * (remarklet.el.promptwindow.find('#remarklet-prompt-content').innerHeight()/2);
-		}});
-		remarklet.el.promptwindow.find('#remarklet-prompt-form input,#remarklet-prompt-form textarea').first().focus();
-		remarklet.el.promptwindow.find('#remarklet-prompt-submit').on('click', function(){
+		};
+	}());
+	/* Prompt Window Module. Dependencies: jQuery */
+	var prompt = (function(){
+		var callback = function(){};
+		var open = function(args){
+			ui.form.html(args.form);
+			args.init();
+			ui.window.show();
+			ui.content.css({'margin-top':function(){
+				return -1 * (ui.content.innerHeight()/2);
+			}});
+			ui.form.find('input,textarea').first().focus();
+			callback = args.callback;
+		};
+		var submit = function(){
 			var data = {};
-			remarklet.el.promptwindow.find('#remarklet-prompt-form *[name]').each(function(){
+			ui.form.find('*[name]').each(function(){
 				data[this.name] = this.value;
 			});
 			callback(data);
-			remarklet.el.promptwindow.hide();
-			$(this).off('click');
-			remarklet.body.on('mousemove', remarklet.recordMousePos);
-		});
-		remarklet.el.promptwindow.find('#remarklet-prompt-cancel').on('click', function(){
-			remarklet.el.promptwindow.hide();
-			remarklet.el.promptwindow.find('#remarklet-prompt-submit').off('click');
-			remarklet.body.on('mousemove', remarklet.recordMousePos);
-		});
-	};
-	remarklet.promptwindowkeydown = function(e){
-		switch(e.which){
-			case 27:
-				/* Escape => Cancel form */
-				e.preventDefault();
-				$('#remarklet-prompt-cancel').click();
-				remarklet.win.off('keydown', remarklet.promptwindowkeydown);
-				break;
-			case 13:
-				/* Enter => Submit form */
-				e.preventDefault();
-				$('#remarklet-prompt-submit').click();
-				remarklet.win.off('keydown', remarklet.promptwindowkeydown);
-				break;
-			default: break;
-		}
-	};
-	remarklet.recordMousePos = function(e){
-		remarklet.mousePos.x = e.pageX - remarklet.el.box.offset().left;
-		remarklet.mousePos.y = e.pageY;
-	};
-	remarklet.changeMode = function(newmode){
-		this.body.removeClass('remarklet-'+remarklet.mode+'mode').addClass('remarklet-'+newmode+'mode');
-		this.mode = newmode;
-		if(newmode == 'drag'){
-			remarklet.body.find('*[contenteditable]').removeAttr('contenteditable');
-			remarklet.texttarget = false;
-			remarklet.target.draggable(remarklet.dragOps);
-			/* HACK: Disabling content edit-ability on an element does not remove the cursor from that element in all browsers, so we create a temporary element to focus on and then remove it. */
-			$('<input type="text" style="width:1px;height:1px;background-color:transparent;border:0 none;opacity:0;position:fixed;top:0;left:0;" />').appendTo(remarklet.body).focus().blur().remove();
-		} else if (newmode == 'text'){
-			if(remarklet.target != undefined){
-				remarklet.target.attr('contenteditable','true');
-			}
-			$('.ui-draggable').draggable('destroy');
-		}
-	};
-	remarklet.doFormat = function(usercommandName, showDefaultUI, valueArgument) {
-		// FROM https://developer.mozilla.org/en-US/docs/Rich-Text_Editing_in_Mozilla, replace later with WYSIWYG
-		if(valueArgument==undefined) valueArgument = null;
-		if(showDefaultUI==undefined) showDefaultUI = false;
-		if(d.queryusercommandEnabled(usercommandName)){
-			d.execusercommand(usercommandName, showDefaultUI, valueArgument);
-		} else if(usercommandName=='increasefontsize' || usercommandName=='decreasefontsize'){
-			var s = prompt('Enter new font size (between 1 and 7)','');
-			d.execusercommand('fontsize',true,s);
-		}
-	};
-	remarklet.buildUI = function(){
-		/* Build Menu */
-		var m = {
-			File: {
-				exportit: $('<li>Export</li>').on('click', remarklet.usercommand.exportPage),
-				saveit: $('<li>Save</li>').on('click', remarklet.usercommand.savePageState),
-				restoreit: $('<li>Restore</li>').on('click', remarklet.usercommand.restorePageState)
-			},
-			View: {
-				grid: $('<li>Grid</li>').on('click', remarklet.usercommand.toggleGrid),
-				outlines: $('<li>Outlines</li>').on('click', remarklet.usercommand.toggleOutlines),
-				css: $('<li>CSS Changes</li>').on('click', remarklet.usercommand.toggleUserCSS)
-			},
-			Insert: {
-				imageobj: $('<li>Image</li>').on('click', remarklet.usercommand.addImage),
-				note: $('<li>Note</li>').on('click', remarklet.usercommand.addNote),
-				htmlobj: $('<li>HTML</li>').on('click', remarklet.usercommand.addCode)
+			ui.window.hide();
+		};
+		var cancel = function(){
+			ui.window.focus().blur().hide();
+		};
+		var ui = {
+			window: $('<div></div>').on('keydown', keydown),
+			form: $('<div></div>'),
+			content: $('<div></div>'),
+			submit: $('<button type="button">Submit</button>').on('click', submit),
+			cancel: $('<button type="button">Cancel</button>').on('click', cancel)
+		};
+		var keydown = function(e){
+			e.stopPropagation();
+			switch(e.keyCode){
+				case 27:
+					/* Escape => Cancel form */
+					e.preventDefault();
+					cancel();
+					break;
+				default: break;
 			}
 		};
-		for(i in m){
-			var $submenu = $('<ol class="remarklet-submenu"></ol>');
-			for(j in m[i]){
-				$submenu.append(m[i][j].addClass(' remarklet-menu-' + j));
+		return {
+			init: function(prefix){
+        var key;
+				for(key in ui){
+					ui[key].attr('id', prefix+'-prompt-'+key);
+				}
+				ui.content.append(ui.form).append(ui.submit).append(ui.cancel).appendTo(ui.window);
+				ui.window.appendTo('body');
+			},
+			get: {
+				window: function(){
+					return ui.window;
+				},
+				form: function(){
+					return ui.form;
+				},
+				submit: function(){
+					return ui.submit;
+				}
+			},
+			open: open
+		};
+	}());
+	var getLastEdited = function(){
+		/* Unfortunately, getting the last element doesn't mean it will have the largest edit number. */
+		var last = 0;
+		$('.remarklet').each(function(item){
+			var curint = parseInt(this.className.match(/remarklet-([0-9]+)/)[1]);
+			if(curint > last){
+				last = curint;
 			}
-			$('<li>' + i + '</li>').append($submenu).appendTo(remarklet.el.menuwrapper).wrap('<ol class="remarklet-menuitem"></ol>');
-		}
-		/* Add App Elements To Page */
-		remarklet.el.exported = remarklet.el.box.add(remarklet.el.usercss).appendTo(remarklet.body);
-		remarklet.el.retained = remarklet.el.gridoverlay.add(remarklet.el.csseditor).add(remarklet.el.menuwrapper).add(remarklet.el.promptwindow).add(remarklet.el.defaults).appendTo(remarklet.body);
+		});
+		return last;
 	};
-	remarklet.docEvents = {
+	/* Define commands that the user can execute */
+	var usercommand = {
+		addImage: function(){
+			prompt.open({
+				form: '<label>Make a placeholder</label><input type="text" value="300x200" id="remarklet-imgdimensions" name="imgdimensions" autofocus="autofocus"> <input type="text" value="#cccccc" id="remarklet-bgcolor" name="bgcolor"> <input type="text" value="#000000" id="remarklet-textcolor" name="textcolor"> <input type="text" value="Image (300x200)" id="remarklet-text" name="imgtext"><br /><label>Enter image url</label><input name="imgurl" id="remarklet-url" type="text" value=""><br><label>Add local file <span title="This image will expire when you leave the page, and will not be stored if you save the page as an HTML file." class="remarklet-hovernote">?</span></label><input name="file" id="remarklet-file" type="file"/>',
+				init: function(){
+					prompt.get.window().find('#remarklet-file').on('change', function(){
+						prompt.get.submit().attr('disabled',true);
+						var f = this.files[0];
+						var fr = new FileReader();
+						fr.onload = function(ev2){
+							prompt.get.submit().removeAttr('disabled');
+							_stored.fileRead = remarklet.getBlobURL(f);
+						};
+						fr.readAsDataURL(f);
+					});
+					$b.off('mousemove', _mouse.update);
+				},
+				callback: function(data){
+					prompt.get.window().find('#remarklet-file').off('change');
+					_stored.editcounter++;
+					var str,
+						ednum = _stored.editcounter;
+					if(data.imgurl.length>1){
+						str = ['<img src="',data.imgurl,'" style="left:',_mouse.x,'px;top:',_mouse.y,'px" class="remarklet-newimg" />'];
+					} else if(_stored.fileRead!==false){
+						str = ['<img src="',_stored.fileRead,'" style="left:',_mouse.x,'px;top:',_mouse.y,'px" class="remarklet-newimg" />'];
+						_stored.fileRead = false;
+					} else {
+						str = ['<div style="color:',data.textcolor,';background-color:',data.bgcolor,';width:',data.imgdimensions.toLowerCase().split('x')[0],'px;height:',data.imgdimensions.toLowerCase().split('x')[1],'px;left:',_mouse.x,'px;top:',_mouse.y,'px" class="remarklet-newimg">',data.imgtext,'</div>'];
+					}
+					str = str.join('');
+					$(str).data('remarklet', ednum).addClass('remarklet remarklet-' + ednum).appendTo(views.box);
+					$b.on('mousemove', _mouse.update);
+				}
+			});
+		},
+		addNote: function(){
+			prompt.open({
+				form: '<label>Enter note text</label><textarea name="notetext" id="remarklet-text" type="text" autofocus="autofocus" cols="48" rows="13">Enter your note\'s text here.</textarea>',
+				init: function(){
+					$b.off('mousemove', _mouse.update);
+				},
+				callback: function(data){
+					_stored.editcounter++;
+					/* Characters seem to be 8px wide */
+					var width = data.notetext.length * 8,
+						ednum = _stored.editcounter,
+						str;
+					if(width > 500){
+						width = 500;
+					}
+					str = ['<div class="remarklet-note" style="left:',_mouse.x,'px;top:',_mouse.y,'px;width:',width,'px">',data.notetext,'</div>'].join('');
+					$(str).data('remarklet', ednum).addClass('remarklet remarklet-' + ednum).appendTo(views.box);
+					$b.on('mousemove', _mouse.update);
+				}
+			});
+		},
+		addCode: function(){
+			prompt.open({
+				form: '<label>Enter HTML</label><textarea name="codetext" id="remarklet-text" type="text" autofocus="autofocus" cols="48" rows="13">Enter your code here.</textarea>',
+				init: function(){
+					$b.off('mousemove', _mouse.update);
+				},
+				callback: function(data){
+					_stored.editcounter++;
+					var str, ednum = _stored.editcounter;
+					str = ['<div class="remarklet-usercode" style="position:absolute;left:',_mouse.x,'px;top:',_mouse.y,'px;">',data.codetext,'</div>'].join('');
+					$(str).data('remarklet', ednum).addClass('remarklet remarklet-' + ednum).appendTo(views.box).css({
+						width: function(){return this.clientWidth + 1;},
+						height: function(){return this.clientHeight + 1;}
+					});
+					$b.on('mousemove', _mouse.update);
+				}
+			});
+		},
+		exportPage: function(){
+			var data = 'data:text/html;charset=UTF-8,',
+				pathpart = location.pathname.split('/'),
+				html; 
+			pathpart.pop();
+			pathpart = pathpart.join('/');
+			if(document.doctype && document.doctype.publicId===''){
+				html = '<!DOCTYPE html>';
+			} else {
+				if(document.doctype){
+					html = '<!DOCTYPE ';
+					html += document.doctype.name.toUpperCase();
+					html += ' PUBLIC "';
+					html += document.doctype.publicId;
+					html += '" "';
+					html += document.doctype.systemId;
+					html += '">';
+				} else {
+					html = document.all[0].text;
+				}
+			}
+			html += document.documentElement.outerHTML;
+			$('script[src*="remarklet.com/rm/scripts"],link[href*="remarklet.com/rm/scripts"]').add(views.retained).each(function(){
+				html = html.replace(this.outerHTML, '');
+			});
+			html = html.replace(/.overflowRulerX > .firebug[^{]+{[^}]+}|.overflowRulerY\s>\s.firebug[^{]+{[^}]+}/gi,'').replace(/(src|href)=("|')\/\//g, '$1=$2'+location.protocol).replace(/(src|href)=("|')(\/|(?=[^:]{6}))/gi, '$1=$2'+location.protocol + '//' + location.hostname + pathpart + '/').replace(/<script/gi,'<!-- script').replace(/<\/script>/gi,'</script -->').replace(/url\(&quot;/gi,'url(').replace(/.(a-z){3}&quot;\)/gi,'$1)').replace(/url\(\//gi,'url('+location.protocol+'//'+location.hostname+pathpart+'/').replace(/\sremarklet-show-(grid|outlines|usercss)\s/g,' ').replace(/\s?remarklet-show-(grid|outlines|usercss)\s?|\s/g,' ');
+			data += encodeURIComponent(html);
+			window.open(data, 'Exported From Remarklet', '');
+		},
+		savePageState: function(){
+			remarklet.pageSavedState = '';
+			$b.children().not(views.retained).each(function(){
+				remarklet.pageSavedState += this.outerHTML.replace(/<script/gi,'<!-- script').replace(/<\/script>/gi,'</script -->');
+			});
+		},
+		restorePageState: function(){
+			if(remarklet.pageSavedState !== ''){
+				$b.children().not(views.retained).remove();
+				$b.prepend(remarklet.pageSavedState);
+				views.usercss = $('#remarklet-usercss');
+				views.box = $('#remarklet-box');
+			}
+		},
+		updateUserCSS: function(e){
+			stylesheet.fromHTML(views.csseditor.find('div').html());
+		},
+		updateUserCSSUI: function(e){
+			var rules = stylesheet.getRules(),
+				html = '',
+				name;
+			for(name in rules){
+				html += name;
+				html += ' ';
+				html += rules[name].replace(/({|;\s?)/g,'$1<br>    ').replace('    }','}<br>');
+			}
+			views.csseditor.find('div').html(html);
+		},
+		viewgrid: function(){
+			$b.toggleClass('remarklet-show-grid');
+		},
+		viewoutlines: function(){
+			$b.toggleClass('remarklet-show-outlines');
+		},
+		viewusercss: function(){
+			$b.toggleClass('remarklet-show-usercss');
+			views.csseditor.find('div').attr('contenteditable', function(){
+				return this.contentEditable != 'true';
+			});
+			$('.remarklet-show-usercss #remarklet-usercss-editor').focus();
+		},
+		viewPreferences: function(){
+			// Use a prompt window to visualize the remarklet.preferences object, and customizations are saved in localStorage using the localSettings module.
+			// The only element in the Preferences window that should have an event is the "Save" button.
+			$b.toggleClass('remarklet-show-preferences');
+		},
+		viewHelp: function(){
+			// Show keyboard shortcuts and explain some processes in a prompt window with only a close button.
+			$b.toggleClass('remarklet-show-help');
+		},
+		switchmode: function(newmode){
+			$b.removeClass('remarklet-'+_mode+'mode').addClass('remarklet-'+newmode+'mode');
+			_mode = newmode;
+			if(newmode == 'drag'){
+				$b.find('*[contenteditable]').removeAttr('contenteditable');
+				_texttarget = false;
+				_target.draggable(dragOps);
+				/* HACK: Disabling content edit-ability on an element does not remove the cursor from that element in all browsers, so we create a temporary element to focus on and then remove it. */
+				$('<input type="text" style="width:1px;height:1px;background-color:transparent;border:0 none;opacity:0;position:fixed;top:0;left:0;" />').appendTo($b).focus().blur().remove();
+			} else if (newmode == 'text'){
+				if(_target !== undefined){
+					_target.attr('contenteditable','true');
+				}
+				$('.ui-draggable').draggable('destroy');
+			}
+		},
+		keyboardshortcuts: function(e){
+			if(e.target != views.csseditor.find('#remarklet-usercss-editor').get(0)){
+				switch(e.keyCode){
+					case 67: /*C*/
+						if(_mode == 'drag' && e.ctrlKey){
+							remarklet.clipboard = _target;
+						}
+						break;
+					case 84: /*T*/
+						if(_mode == 'drag'){
+							if(!e.ctrlKey){
+								usercommand.switchmode('text');
+								e.preventDefault();
+							} else if(e.altKey){
+								_target.resizable(remarklet.resizeOps);
+								e.preventDefault();
+							}
+						}
+						break;
+					case 86: /*V*/
+						if(_mode == 'drag' && e.ctrlKey){
+							_stored.editcounter++;
+							if(remarklet.clipboard.draggable('instance')){
+								remarklet.clipboard.draggable('destroy');
+							}
+							var original = remarklet.clipboard.removeClass('remarklet-target').get(0);
+							var dupe = duplicate.create(original, original, {id: '', class: 'remarklet remarklet-' + _stored.editcounter});
+							$(dupe).data('remarklet', _stored.editcounter);
+						} else if(_mode == 'text' && !_texttarget){
+							usercommand.switchmode('drag');
+							e.preventDefault();
+						}
+						break;
+					case 13: /*Enter*/
+						if(_mode == 'drag' && $('.ui-resizable').length > 0){
+							$('.ui-resizable').resizable('destroy');
+						} else if(_mode == 'text' && e.ctrlKey){
+							usercommand.switchmode('drag');
+							e.preventDefault();
+							e.stopPropagation();
+						}
+						break;
+					case 46: /*Del*/
+						if(_mode == 'drag'){
+							_target.remove();
+						}
+            break;
+					default: break;
+				}
+			}
+		},
+		doFormat: function(usercommandName, showDefaultUI, valueArgument) {
+			// FROM https://developer.mozilla.org/en-US/docs/Rich-Text_Editing_in_Mozilla, replace later with WYSIWYG
+			var d;
+			if(valueArgument===undefined) valueArgument = null;
+			if(showDefaultUI===undefined) showDefaultUI = false;
+			if(d.queryusercommandEnabled(usercommandName)){
+				d.execusercommand(usercommandName, showDefaultUI, valueArgument);
+			} else if(usercommandName=='increasefontsize' || usercommandName=='decreasefontsize'){
+				var s = prompt('Enter new font size (between 1 and 7)','');
+				d.execusercommand('fontsize',true,s);
+			}
+		}
+	};
+	var docElementEvents = {
 		mouseover: function(e){
-			if(remarklet.dragging) return;
-			var $this = remarklet.target = $(this).addClass('remarklet-target');
-			switch(remarklet.mode){
+			if(_dragging) return;
+			var $this = _target = $(this).addClass('remarklet-target');
+			switch(_mode){
 				case 'drag':
-					$this.draggable(remarklet.dragOps);
+					$this.draggable(dragOps);
 					break;
 				case 'text':
 					$this.attr('contenteditable','true');
@@ -453,24 +620,28 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 			}
 			/* Provide the target's CSS selector in the User CSS window. */
 			var selector = this.tagName.toLowerCase();
-			if($this.attr('id')!=undefined) selector += '#' + this.id;
-			selector += '.remarklet-ed-' + $this.data('remarklet-ed');
-			remarklet.el.csseditor.attr('data-remarklet', selector);
+			if($this.attr('id')!==undefined){
+				selector += '#';
+				selector += this.id;
+			}
+			selector += '.remarklet-';
+			selector += $this.data('remarklet');
+			views.csseditor.attr('data-remarklet', selector);
 			e.stopPropagation();
 		},
 		mouseout: function(e){
-			if(remarklet.dragging) return;
+			if(_dragging) return;
 			var $this = $(this).removeClass('remarklet-target');
 			$('.ui-draggable').draggable('destroy');
-			if(remarklet.mode == 'text'){
+			if(_mode == 'text'){
 				$this.removeAttr('contenteditable');
 			}
 			e.stopPropagation();
 		},
 		mousedown: function(e){
 			if(e.which!=1) return;
-			remarklet.target = $(this);
-			if(remarklet.mode == 'text') remarklet.texttarget = $(this);
+			_target = $(this);
+			if(_mode == 'text') _texttarget = $(this);
 			e.stopPropagation();
 		},
 		click: function(e){
@@ -479,81 +650,99 @@ requirejs(['jquery','jqueryui'], function($, $ui){
 			}
 		},
 		mousemove: function(e){
-			remarklet.recordMousePos(e);
+			_mouse.update(e);
+		},
+		toggle: function(state){
+			/* Event delegation for non-app elements. */
+			var name;
+			if(state == 'on'){
+				for(name in docElementEvents){
+					if(name != 'toggle'){
+						$b.on(name, '.remarklet', docElementEvents[name]);
+					}
+				}
+			} else {
+				for(name in docElementEvents){
+					if(name != 'toggle'){
+						$b.off(name, '.remarklet', docElementEvents[name]);
+					}
+				}
+			}
 		}
 	};
-	remarklet.docEvents.toggle = function(state){
-		/* Event delegation for non-app elements. */
-		if(state == 'on'){
-			for(var name in remarklet.docEvents){
-				remarklet.body.on(name, '.remarklet-ed', remarklet.docEvents[name]);
+	views.build = function(){
+		/* Build menu */
+		var name, subname, prop, $menu, $submenu;
+		var m = {
+			File: {
+				Export: usercommand.exportPage,
+				Save: usercommand.savePageState,
+				Restore: usercommand.restorePageState
+			},
+			/* Edit */
+			View: {
+				Grid: usercommand.viewgrid,
+				Outlines: usercommand.viewoutlines,
+				CSS: usercommand.viewusercss
+			},
+			Insert: {
+				Image: usercommand.addImage,
+				Note: usercommand.addNote,
+				HTML: usercommand.addCode
 			}
-		} else {
-			for(var name in remarklet.docEvents){
-				remarklet.body.off(name, '.remarklet-ed', remarklet.docEvents[name]);
+			/* Help */
+		};
+		for(name in m){
+			$menu = $('<li>' + name + '</li>');
+			prop = m[name];
+			if(typeof prop == 'object'){
+				$submenu = $('<ol class="remarklet-submenu"></ol>');
+				for(subname in prop){
+					$('<li class="remarklet-menu-' + subname.toLowerCase() + '">' + subname + '</li>').on('click', prop[subname]).appendTo($submenu);
+				}
+				$menu.append($submenu);
 			}
+			$menu.appendTo(views.menuwrapper).wrap('<ol class="remarklet-menuitem"></ol>');
 		}
+		
+		/* Add remaining app UI events */
+		views.csseditor.on('keydown', function(){
+			if(_typingTimer !== false){
+				window.clearTimeout(_typingTimer);
+			}
+			_typingTimer = window.setTimeout(function(){
+				views.csseditor.trigger('stoptyping');
+				_typingTimer = false;
+			}, 500);
+		});
+		views.csseditor.on('stoptyping', usercommand.updateUserCSS);
+		$w.on('keydown', usercommand.keyboardshortcuts);
+		
+		/* Initialize modules. */
+		prompt.init('remarklet');
+		stylesheet.init(views.usercss.get(0), usercommand.updateUserCSSUI);
+		duplicate.init(stylesheet);
+		
+		/* Insert app elements into page. */
+		views.box.add(views.usercss).appendTo($b);
+		views.retained = views.gridoverlay.add(views.csseditor).add(views.menuwrapper).add(prompt.get.window()).add(views.preferences).add(views.help).appendTo($b);
 	};
 	remarklet.init = function(){
 		$.noConflict();
 		/* Tag all non-app page elements we may want to interact with. */
-		remarklet.body.find('*:not(:hidden,.remarklet-ed)').each(function(index, item){
-			var num = index + remarklet.storedcss.editcounter;
-			$(item).data('remarklet-ed',num).addClass('remarklet-ed remarklet-ed-' + num);
+		$b.find('*:not(:hidden,.remarklet)').each(function(index, item){
+			var num = index + _stored.editcounter;
+			$(item).data('remarklet',num).addClass('remarklet remarklet-' + num);
 		});
-		remarklet.storedcss.editcounter = remarklet.getLastEdited();
+		_stored.editcounter = getLastEdited();
 		/* Add UI Elements to page. */
-		remarklet.buildUI();
+		views.build();
+		duplicate.setSheet(views.usercss.get(0));
 		/* Event delegation for non-app elements. */
 		remarklet.docEvents.toggle('on');
-		remarklet.win.on('keydown', function(e){
-			switch(e.keyCode){
-				case 67: /*C*/
-					if(remarklet.mode == 'drag' && e.ctrlKey){
-						remarklet.clipboard = remarklet.target;
-					}
-					break;
-				case 84: /*T*/
-					if(remarklet.mode == 'drag'){
-						if(!e.ctrlKey){
-							remarklet.changeMode('text');
-							e.preventDefault();
-						} else if(e.altKey){
-							remarklet.target.resizable(remarklet.resizeOps);
-							e.preventDefault();
-						}
-					}
-					break;
-				case 86: /*V*/
-					if(remarklet.mode == 'drag' && e.ctrlKey){
-						remarklet.storedcss.editcounter++;
-						var $dupe = remarklet.usercommand.duplicate(remarklet.clipboard.draggable('disable').removeAttr('class'), {id: '', class: 'remarklet-ed remarklet-ed-' + remarklet.storedcss.editcounter});
-						console.log($dupe);
-						$dupe.data('remarklet-ed', remarklet.storedcss.editcounter).appendTo(remarklet.el.box);
-					} else if(remarklet.mode == 'text' && !remarklet.texttarget){
-						remarklet.changeMode('drag');
-						e.preventDefault();
-					}
-					break;
-				case 13: /*Enter*/
-					if(remarklet.mode == 'drag' && $('.ui-resizable').length > 0){
-						$('.ui-resizable').resizable('destroy');
-					} else if(remarklet.mode == 'text' && e.ctrlKey){
-						remarklet.changeMode('drag');
-						e.preventDefault();
-						e.stopPropagation();
-					}
-					break;
-				case 46: /*Del*/
-					if(remarklet.mode == 'drag'){
-						remarklet.target.remove();
-					}
-				default: break;
-			}
-		});
 	};
 	remarklet.init();
 	/* http://remysharp.com/2009/02/27/analytics-for-bookmarklets-injected-scripts/ */
-	function gaTrack(g,h,i){function c(e,j){return e+Math.floor(Math.random()*(j-e))}var f=1000000000,k=c(f,9999999999),a=c(10000000,99999999),l=c(f,2147483647),b=(new Date()).getTime(),d=window.location,m=new Image(),n='//www.google-analytics.com/__utm.gif?utmwv=1.3&utmn='+k+'&utmsr=-&utmsc=-&utmul=-&utmje=0&utmfl=-&utmdt=-&utmhn='+h+'&utmr='+d+'&utmp='+i+'&utmac='+g+'&utmcc=__utma%3D'+a+'.'+l+'.'+b+'.'+b+'.'+b+'.2%3B%2B__utmb%3D'+a+'%3B%2B__utmc%3D'+a+'%3B%2B__utmz%3D'+a+'.'+b+'.2.2.utmccn%3D(referral)%7Cutmcsr%3D'+d.host+'%7Cutmcct%3D'+d.pathname+'%7Cutmcmd%3Dreferral%3B%2B__utmv%3D'+a+'.-%3B';m.src=n}
+	function gaTrack(g,h,i){function c(e,j){return e+Math.floor(Math.random()*(j-e));}var f=1000000000,k=c(f,9999999999),a=c(10000000,99999999),l=c(f,2147483647),b=(new Date()).getTime(),d=window.location,m=new Image(),n='//www.google-analytics.com/__utm.gif?utmwv=1.3&utmn='+k+'&utmsr=-&utmsc=-&utmul=-&utmje=0&utmfl=-&utmdt=-&utmhn='+h+'&utmr='+d+'&utmp='+i+'&utmac='+g+'&utmcc=__utma%3D'+a+'.'+l+'.'+b+'.'+b+'.'+b+'.2%3B%2B__utmb%3D'+a+'%3B%2B__utmc%3D'+a+'%3B%2B__utmz%3D'+a+'.'+b+'.2.2.utmccn%3D(referral)%7Cutmcsr%3D'+d.host+'%7Cutmcct%3D'+d.pathname+'%7Cutmcmd%3Dreferral%3B%2B__utmv%3D'+a+'.-%3B';m.src=n;}
 	gaTrack('UA-44858109-1', 'remarklet.com', '/files/remarklet.js');
 });
